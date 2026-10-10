@@ -38,6 +38,8 @@ def run_check(app,window_type,video,report):
                 origin=lambda widget:widget.mapTo(w,widget.rect().topLeft()).y()
                 assert origin(w.progress)<origin(w.video_stack)
                 assert origin(w.play_slider)<origin(w.queue_bar)<origin(w.table)
+                assert abs(origin(w.queue_bar)-origin(w.focus_button))<=3
+                assert not w.results_panel.isAncestorOf(w.queue_bar)
                 assert w.start.parent() is w.queue_bar and w.stop.parent() is w.queue_bar and w.badge.parent() is w.queue_bar
                 w.grab().save(str(report.with_suffix('.png')))
                 dialog=BackgroundDialog(w,w.appearance,w.data_dir);dialog.show();state['dialog']=dialog;state['phase']=3;return
