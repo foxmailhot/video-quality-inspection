@@ -21,7 +21,10 @@ notes = file.parent / 'notes.md'
 notes.write_text(spec['notes'], 'utf-8')
 
 def gh(*args):
-    return subprocess.run(['gh', *args], check=True, capture_output=True, text=True, encoding="utf-8").stdout
+    result = subprocess.run(['gh', *args], capture_output=True, text=True, encoding='utf-8')
+    if result.returncode:
+        raise RuntimeError('GitHub release command failed: ' + result.stderr[:2000])
+    return result.stdout
 
 existing = subprocess.run(['gh', 'release', 'view', tag, '--repo', repo, '--json', 'isDraft'],
                           capture_output=True, text=True, encoding="utf-8")
@@ -32,7 +35,8 @@ else:
     gh('release', 'create', tag, '--repo', repo, '--draft', '--title', 'FrameScope ' + version,
        '--notes-file', str(notes), '--target', os.environ['GITHUB_SHA'])
 gh('release', 'upload', tag, str(file), str(record), str(checksum), '--repo', repo, '--clobber')
-release = json.loads(gh('api', f'repos/{repo}/releases/tags/{tag}'))
+release_id = json.loads(gh('release', 'view', tag, '--repo', repo, '--json', 'databaseId'))['databaseId']
+release = json.loads(gh('api', f'repos/{repo}/releases/{release_id}'))
 assets = {asset['name']: asset for asset in release['assets']}
 for path in (file, record, checksum):
     asset = assets[path.name]
