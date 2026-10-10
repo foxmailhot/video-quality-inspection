@@ -20,10 +20,10 @@ notes = file.parent / 'notes.md'
 notes.write_text(spec['notes'], 'utf-8')
 
 def gh(*args):
-    return subprocess.run(['gh', *args], check=True, capture_output=True, text=True).stdout
+    return subprocess.run(['gh', *args], check=True, capture_output=True, text=True, encoding="utf-8").stdout
 
 existing = subprocess.run(['gh', 'release', 'view', tag, '--repo', repo, '--json', 'isDraft'],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, encoding="utf-8")
 if existing.returncode == 0:
     if not json.loads(existing.stdout)['isDraft']:
         raise SystemExit('Published version already exists; choose a new version')
