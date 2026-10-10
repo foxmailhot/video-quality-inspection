@@ -34,6 +34,16 @@ jobs:
           $report = Get-Content runtime-check.json -Raw | ConvertFrom-Json
           $expected = (Get-Content publish.json -Raw | ConvertFrom-Json).version
           if ($report.version -ne $expected) { throw 'Packaged version mismatch' }
+      - name: Validate CPU playback and frame navigation
+        shell: pwsh
+        run: |
+          python tools/create_demo.py
+          $env:QT_FFMPEG_DECODING_HW_DEVICE_TYPES = ','
+          $env:QT_DISABLE_HW_TEXTURES_CONVERSION = '1'
+          $p = Start-Process payload-build/FrameScope/FrameScope.exe -ArgumentList '--check-upgrade', 'qc-demo.mp4', 'ui-check.json' -WindowStyle Hidden -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw 'Packaged UI process failed' }
+          $report = Get-Content ui-check.json -Raw | ConvertFrom-Json
+          if (-not $report.passed) { throw $report.error }
       - name: Prepare installer contents
         shell: pwsh
         run: |
