@@ -42,7 +42,13 @@ jobs:
           Copy-Item docs/* payload -Recurse -Force
           Copy-Item source payload/source -Recurse -Force
       - name: Install Inno Setup
-        run: choco install innosetup --version=6.5.4 -y --no-progress
+        shell: pwsh
+        run: |
+          $compiler = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'
+          if (-not (Test-Path $compiler)) {
+            choco install innosetup -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed' }
+          }
       - name: Compile installer
         shell: pwsh
         run: |
