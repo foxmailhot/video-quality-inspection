@@ -5,7 +5,8 @@ root = Path(__file__).resolve().parents[1]
 spec = json.loads((root / 'publish.json').read_text('utf-8-sig'))
 version = spec['version']
 tag = 'v' + version
-repo = os.environ['GITHUB_REPOSITORY']
+identity = json.loads(subprocess.run(['gh', 'api', 'repositories/1412709349'], check=True, capture_output=True, text=True, encoding='utf-8').stdout)
+repo = identity['full_name']
 file = root / 'release-output' / f'FrameScope-{version}-Setup-x64.exe'
 digest = hashlib.sha256(file.read_bytes()).hexdigest()
 manifest = dict(product='FrameScope', platform='windows-x64', version=version,
