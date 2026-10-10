@@ -246,7 +246,7 @@ def analyze(path, cfg, progress=lambda *args: None, cancelled=lambda:False):
         if stream.frames and count < stream.frames:
             warnings.append(f'解码 {count} 帧，容器声明 {stream.frames} 帧；可能有丢帧或损坏。')
         info['duration'] = max(dur,end)
-        result = dict(version='2.0',path=str(Path(path).resolve()),settings=asdict(cfg),info=info,
+        result = dict(version='2.0.1',path=str(Path(path).resolve()),settings=asdict(cfg),info=info,
                       issues=[asdict(v) for v in det.finish(end)],warnings=warnings,frames=count,
                       elapsed=round(time.monotonic()-started,2),complete=not any('短于' in w or '丢帧' in w for w in warnings))
         progress(100, f'完成 · {count:,} 帧 · {len(result["issues"])} 个标记',result['issues'])
