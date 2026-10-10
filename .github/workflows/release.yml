@@ -32,7 +32,8 @@ jobs:
           $p = Start-Process payload-build/FrameScope/FrameScope.exe -ArgumentList '--check-environment', 'runtime-check.json' -WindowStyle Hidden -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw 'Runtime check failed' }
           $report = Get-Content runtime-check.json -Raw | ConvertFrom-Json
-          if ($report.version -ne '2.0.0') { throw 'Packaged version mismatch' }
+          $expected = (Get-Content publish.json -Raw | ConvertFrom-Json).version
+          if ($report.version -ne $expected) { throw 'Packaged version mismatch' }
       - name: Prepare installer contents
         shell: pwsh
         run: |
