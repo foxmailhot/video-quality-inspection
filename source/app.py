@@ -679,6 +679,9 @@ QPushButton { background:#263447; border:1px solid #35465e; padding:5px 8px; bor
 QPushButton:hover { background:#354860; } QPushButton:disabled { color:#66778d; background:#202938; }
 QPushButton:checked { background:#294b49; border:1px solid #63dbb2; color:#b0ffe4; }
 QPushButton#primary { background:#63dbb2; color:#0c2925; font-weight:700; border:0; }
+QMenu { background:#202e40; border:1px solid #3a4d64; padding:4px; }
+QMenu::item { padding:7px 24px 7px 12px; }
+QMenu::item:selected { background:#355f63; }
 QListWidget,QTableWidget { background:rgba(16,23,33,140); border:1px solid #2a394e; border-radius:7px; alternate-background-color:#192332; }
 QListWidget::item { padding:14px 9px; border-bottom:1px solid #263244; } QListWidget::item:selected { background:#294453; color:white; }
 QHeaderView::section { background:#202c3c; color:#9fadc0; border:0; padding:8px; }
