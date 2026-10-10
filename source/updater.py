@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 from PySide6.QtCore import QObject,QThread,Signal,Slot
 from PySide6.QtWidgets import QMessageBox,QProgressDialog
 VERSION='2.0.0'
-REPOSITORY='https://github.com/foxmailhot/-'
+REPOSITORY='https://github.com/foxmailhot/video-quality-inspection'
 REPOSITORY_ID=1412709349
 REPO_API='https://api.github.com/repositories/'+str(REPOSITORY_ID)
 MANIFEST_URL=REPOSITORY+'/releases/latest/download/latest.json'
