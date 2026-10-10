@@ -16,7 +16,7 @@ from shortcuts import ShortcutRouter, ShortcutDialog, DEFAULT_KEYS, normalize_ke
 from playback_clock import PlaybackClock
 from monitor import VideoMonitor, WheelButton
 from reporting import write_html, read_report, csv_safe
-from updater import Updater,VERSION
+from updater import Updater,VERSION,fetch_latest
 from issue_tools import IssueDialog,ReportTask
 from compact_controls import SeekSlider,CompactStatus
 from appearance import BackgroundCanvas, GlassPanel, BackgroundDialog, DEFAULT_APPEARANCE, clean_settings
@@ -694,6 +694,11 @@ QSlider::handle:horizontal { width:11px; margin:-4px 0; border-radius:5px; backg
 '''
 
 def main():
+    if '--check-update' in sys.argv:
+        target=sys.argv[sys.argv.index('--check-update')+1]
+        try:save_json(target,dict(passed=True,current=VERSION,latest=fetch_latest()))
+        except Exception as exc:save_json(target,dict(passed=False,error=str(exc)))
+        return
     if '--check-environment' in sys.argv:
         from engine import init_gpu
         import numpy as np,platform,av
