@@ -30,10 +30,17 @@ existing = subprocess.run(['gh', 'release', 'view', tag, '--repo', repo, '--json
                           capture_output=True, text=True, encoding="utf-8")
 if existing.returncode == 0:
     if not json.loads(existing.stdout)['isDraft']:
-        raise SystemExit('Published version already exists; choose a new version')
+        if spec.get('replace_tag') != tag:
+            raise SystemExit('Published version already exists; choose a new version')
+        # Explicit same-version replacement: hide attachments until all are verified.
+        gh('release', 'edit', tag, '--repo', repo, '--draft=true')
 else:
     gh('release', 'create', tag, '--repo', repo, '--draft', '--title', 'FrameScope ' + version,
        '--notes-file', str(notes), '--target', os.environ['GITHUB_SHA'])
+
+if existing.returncode == 0 and spec.get('replace_tag') == tag:
+    gh('api', '--method', 'PATCH', f'repos/{repo}/git/refs/tags/{tag}',
+       '-f', 'sha=' + os.environ['GITHUB_SHA'], '-F', 'force=true')
 gh('release', 'upload', tag, str(file), str(record), str(checksum), '--repo', repo, '--clobber')
 release_id = json.loads(gh('release', 'view', tag, '--repo', repo, '--json', 'databaseId'))['databaseId']
 release = json.loads(gh('api', f'repos/{repo}/releases/{release_id}'))
@@ -44,5 +51,5 @@ for path in (file, record, checksum):
         raise SystemExit('Uploaded asset size mismatch')
     if asset.get('digest') and asset['digest'] != 'sha256:' + hashlib.sha256(path.read_bytes()).hexdigest():
         raise SystemExit('Uploaded asset hash mismatch')
-gh('release', 'edit', tag, '--repo', repo, '--draft=false', '--latest')
+gh('release', 'edit', tag, '--repo', repo, '--notes-file', str(notes), '--draft=false', '--latest')
 print(f'Published https://github.com/{repo}/releases/tag/{tag}')
