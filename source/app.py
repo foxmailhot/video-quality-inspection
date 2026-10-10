@@ -7,7 +7,7 @@ from PySide6.QtGui import QColor, QPainter, QPen, QShortcut, QKeySequence, QImag
 from PySide6.QtWidgets import (QApplication,QMainWindow,QWidget,QVBoxLayout,QHBoxLayout,
     QPushButton,QLabel,QListWidget,QListWidgetItem,QSplitter,QTableWidget,QTableWidgetItem,
     QHeaderView,QProgressBar,QFileDialog,QMessageBox,QDoubleSpinBox,QSpinBox,QFormLayout,
-    QGroupBox,QScrollArea,QCheckBox,QComboBox,QAbstractItemView,QFrame,QStackedWidget,QDialog,QSlider,QPlainTextEdit,QToolTip,QProgressDialog)
+    QGroupBox,QScrollArea,QCheckBox,QComboBox,QAbstractItemView,QFrame,QStackedWidget,QDialog,QSlider,QPlainTextEdit,QToolTip,QProgressDialog,QMenu)
 from PySide6.QtMultimedia import QMediaPlayer,QAudioOutput
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from engine import Settings, analyze, Cancelled, save_json
@@ -88,7 +88,7 @@ class Timeline(QWidget):
 class Window(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('FrameScope 2.0 · 视频质检工作台')
+        self.setWindowTitle(f'FrameScope {VERSION} · 视频质检工作台')
         self.resize(1480,940); self.setMinimumSize(1040,700)
         self.data_dir=Path(QStandardPaths.writableLocation(QStandardPaths.AppLocalDataLocation))
         self.data_dir.mkdir(parents=True,exist_ok=True)
@@ -107,12 +107,11 @@ class Window(QMainWindow):
             button=QPushButton(label);button.clicked.connect(fn);header.addWidget(button)
         self.params_button=QPushButton('检测参数');self.params_button.clicked.connect(self.open_parameters);header.addWidget(self.params_button)
         header.addStretch()
-        self.keys_button=QPushButton('快捷键');self.keys_button.clicked.connect(self.edit_shortcuts);header.addWidget(self.keys_button)
-        self.background_button=QPushButton('背景');self.background_button.clicked.connect(self.edit_background);header.addWidget(self.background_button)
-        self.update_button=QPushButton('更新');self.update_button.clicked.connect(lambda:self.updater.check(True));header.addWidget(self.update_button)
-        self.badge=QLabel('本地处理');self.badge.setToolTip('视频不会上传');self.badge.setObjectName('badge');header.addWidget(self.badge)
-        self.start=QPushButton('开始队列');self.start.setObjectName('primary');self.start.clicked.connect(self.start_queue);header.addWidget(self.start)
-        self.stop=QPushButton('停止');self.stop.clicked.connect(self.stop_queue);self.stop.setEnabled(False);header.addWidget(self.stop);outer.addLayout(header)
+        self.settings_button=QPushButton('设置');self.settings_menu=QMenu(self.settings_button)
+        self.settings_menu.addAction('快捷键',self.edit_shortcuts)
+        self.settings_menu.addAction('背景',self.edit_background)
+        self.settings_menu.addAction('检查更新',lambda:self.updater.check(True))
+        self.settings_button.setMenu(self.settings_menu);header.addWidget(self.settings_button);outer.addLayout(header)
         split=QSplitter(Qt.Horizontal); outer.addWidget(split,1)
         left=GlassPanel(root); ll=QVBoxLayout(left); ll.setContentsMargins(8,8,8,8)
         ll.addWidget(QLabel('检测队列')); self.queue=QListWidget(); self.queue.setMinimumWidth(230); self.queue.currentRowChanged.connect(self.select_job); ll.addWidget(self.queue)
@@ -121,7 +120,12 @@ class Window(QMainWindow):
         ll.addWidget(QLabel('拖入视频文件即可添加\n双击问题列表可跳到对应位置'))
         split.addWidget(left)
         center=GlassPanel(root); cl=QVBoxLayout(center); cl.setContentsMargins(8,8,8,8)
-        self.file_label=QLabel('添加视频，开始检查'); self.file_label.setObjectName('filename'); cl.addWidget(self.file_label)
+        monitor_header=QHBoxLayout();monitor_header.setSpacing(8)
+        self.file_label=CompactStatus('添加视频，开始检查');self.file_label.setObjectName('filename');monitor_header.addWidget(self.file_label,1)
+        self.scan_percent=QLabel('检测 0%');self.scan_percent.setMinimumWidth(65);monitor_header.addWidget(self.scan_percent)
+        self.progress=QProgressBar();self.progress.setFormat('检测进度  %p%');self.progress.setTextVisible(False);self.progress.setFixedSize(120,6);self.progress.setValue(0)
+        self.progress.valueChanged.connect(lambda value:self.scan_percent.setText('检测中…' if value<0 else f'检测 {value}%'));monitor_header.addWidget(self.progress)
+        cl.addLayout(monitor_header)
         self.monitor_split=QSplitter(Qt.Vertical);cl.addWidget(self.monitor_split,1)
         monitor_panel=QWidget();ml=QVBoxLayout(monitor_panel);ml.setContentsMargins(0,0,0,0);self.monitor_split.addWidget(monitor_panel)
         self.player=QMediaPlayer(self); self.audio=QAudioOutput(self); self.audio.setVolume(.65); self.player.setAudioOutput(self.audio)
@@ -149,6 +153,10 @@ class Window(QMainWindow):
         for canvas in (self.video,self.frame_preview):
             canvas.geometryChanged.connect(self.adapt_monitor);canvas.panChanged.connect(self.sync_pan)
         lower=QWidget();self.results_panel=lower;cl=QVBoxLayout(lower);cl.setContentsMargins(0,0,0,0);self.monitor_split.addWidget(lower);self.monitor_split.setStretchFactor(0,3);self.monitor_split.setStretchFactor(1,2)
+        self.queue_bar=QWidget();queue_controls=QHBoxLayout(self.queue_bar);queue_controls.setContentsMargins(0,0,0,0);queue_controls.setSpacing(6);queue_controls.addStretch()
+        self.badge=QLabel('本地处理');self.badge.setToolTip('视频不会上传');self.badge.setObjectName('badge');queue_controls.addWidget(self.badge)
+        self.start=QPushButton('开始队列');self.start.setObjectName('primary');self.start.clicked.connect(self.start_queue);queue_controls.addWidget(self.start)
+        self.stop=QPushButton('停止');self.stop.clicked.connect(self.stop_queue);self.stop.setEnabled(False);queue_controls.addWidget(self.stop);cl.addWidget(self.queue_bar)
         self.results_split=QSplitter(Qt.Horizontal);self.results_split.setHandleWidth(9);self.results_split.setChildrenCollapsible(False);cl.addWidget(self.results_split,1)
         track_panel=QWidget();track_layout=QVBoxLayout(track_panel);track_layout.setContentsMargins(0,0,0,0)
         track_title=QLabel('问题轨道 · 点击定位');track_title.setMinimumHeight(30);track_layout.addWidget(track_title)
@@ -210,9 +218,6 @@ class Window(QMainWindow):
         self.params_dialog=QDialog(self);self.params_dialog.setWindowTitle('检测参数');self.params_dialog.resize(480,740);pd=QVBoxLayout(self.params_dialog);pd.addWidget(scroll);done=QPushButton('完成');done.clicked.connect(self.params_dialog.accept);pd.addWidget(done);self.params_dialog.finished.connect(lambda:self.save_state())
         for view in (self.queue,self.table,scroll):view.viewport().setAutoFillBackground(False)
         footer=QHBoxLayout();footer.setSpacing(8);self.status=CompactStatus('就绪');footer.addWidget(self.status,1)
-        self.scan_percent=QLabel('检测 0%');self.scan_percent.setMinimumWidth(65);footer.addWidget(self.scan_percent)
-        self.progress=QProgressBar();self.progress.setFormat('检测进度  %p%');self.progress.setTextVisible(False);self.progress.setFixedSize(120,6);self.progress.setValue(0)
-        self.progress.valueChanged.connect(lambda value:self.scan_percent.setText('检测中…' if value<0 else f'检测 {value}%'));footer.addWidget(self.progress)
         self.total=QLabel('队列 0 / 0');self.total.setObjectName('muted');footer.addWidget(self.total);outer.addLayout(footer)
         self.player.positionChanged.connect(self.position_changed); self.player.durationChanged.connect(self.duration_changed)
         self.player.mediaStatusChanged.connect(self.media_status)
