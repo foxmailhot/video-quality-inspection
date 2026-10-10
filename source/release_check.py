@@ -33,6 +33,12 @@ def run_check(app,window_type,video,report):
             if state['phase']==2:
                 assert w.appearance['mode']=='custom' and not w.background.original.isNull()
                 assert w.background.surface.toImage()!=w.background.blurred.toImage()
+                assert [a.text() for a in w.settings_menu.actions()]==['快捷键','背景','检查更新']
+                assert w.settings_button.menu() is w.settings_menu
+                origin=lambda widget:widget.mapTo(w,widget.rect().topLeft()).y()
+                assert origin(w.progress)<origin(w.video_stack)
+                assert origin(w.play_slider)<origin(w.queue_bar)<origin(w.table)
+                assert w.start.parent() is w.queue_bar and w.stop.parent() is w.queue_bar and w.badge.parent() is w.queue_bar
                 w.grab().save(str(report.with_suffix('.png')))
                 dialog=BackgroundDialog(w,w.appearance,w.data_dir);dialog.show();state['dialog']=dialog;state['phase']=3;return
             if state['phase']==3:
@@ -48,7 +54,7 @@ def run_check(app,window_type,video,report):
                 w.player.pause()
                 w.clear_all();assert not w.jobs and not w.timeline.issues and w.queue.count()==0
                 assert w.player.source().isEmpty() and w.frame_preview.image.isNull()
-                save_json(report,dict(passed=True,frame_forward=.84,frame_backward=.8,managed_background=True,glass=True,clear_all=True,async_playback=True,horizontal_results=True,cpu_preview_requested=os.environ.get('QT_FFMPEG_DECODING_HW_DEVICE_TYPES')==','))
+                save_json(report,dict(passed=True,frame_forward=.84,frame_backward=.8,managed_background=True,glass=True,clear_all=True,async_playback=True,horizontal_results=True,settings_menu=True,monitor_progress=True,queue_controls_between=True,cpu_preview_requested=os.environ.get('QT_FFMPEG_DECODING_HW_DEVICE_TYPES')==','))
                 timer.stop();w.close();app.quit()
         except Exception:
             save_json(report,dict(passed=False,error=traceback.format_exc()));timer.stop();w.close();app.quit()
