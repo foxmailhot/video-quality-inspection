@@ -1,0 +1,54 @@
+name: Build and publish FrameScope
+on:
+  push:
+    branches: [main]
+    paths: [publish.json]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: framescope-release
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.14'
+          cache: pip
+          cache-dependency-path: source/requirements.txt
+      - name: Install runtime dependencies
+        run: python -m pip install -r source/requirements.txt
+      - name: Validate update logic
+        run: python tools/test_update.py
+      - name: Package application
+        run: python -m PyInstaller --noconfirm --distpath payload-build --workpath build source/FrameScope.spec
+      - name: Validate packaged runtime
+        shell: pwsh
+        run: |
+          $p = Start-Process payload-build/FrameScope/FrameScope.exe -ArgumentList '--check-environment', 'runtime-check.json' -WindowStyle Hidden -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw 'Runtime check failed' }
+          $report = Get-Content runtime-check.json -Raw | ConvertFrom-Json
+          if ($report.version -ne '2.0.0') { throw 'Packaged version mismatch' }
+      - name: Prepare installer contents
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force payload,release-output | Out-Null
+          Copy-Item payload-build/FrameScope/* payload -Recurse -Force
+          Copy-Item docs/* payload -Recurse -Force
+          Copy-Item source payload/source -Recurse -Force
+      - name: Install Inno Setup
+        run: choco install innosetup --version=6.5.4 -y --no-progress
+      - name: Compile installer
+        shell: pwsh
+        run: |
+          $compiler = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'
+          & $compiler "/DPayloadDir=$env:GITHUB_WORKSPACE\payload" "/DInstallerOutput=$env:GITHUB_WORKSPACE\release-output" source/installer.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
+      - name: Publish installer and update manifest
+        run: python tools/publish_release.py
+        env:
+          GH_TOKEN: ${{ github.token }}
