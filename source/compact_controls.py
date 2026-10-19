@@ -1,5 +1,23 @@
-from PySide6.QtCore import Qt,Signal
-from PySide6.QtWidgets import QSlider,QLabel,QSizePolicy,QStyle,QStyleOptionSlider
+from PySide6.QtCore import Qt,Signal,QTimer
+from PySide6.QtWidgets import QSlider,QLabel,QSizePolicy,QStyle,QStyleOptionSlider,QTableWidget,QHeaderView
+
+
+class IssueTable(QTableWidget):
+    """Bounded row height; horizontal scrolling instead of tall wrapped cells."""
+    def __init__(self,*args):
+        super().__init__(*args);self.fit_pending=False
+        self.setWordWrap(False);self.setTextElideMode(Qt.ElideRight)
+        self.verticalHeader().setSectionResizeMode(QHeaderView.Fixed);self.verticalHeader().setDefaultSectionSize(34)
+        self.horizontalHeader().sectionResized.connect(self.schedule_fit)
+    def schedule_fit(self,section=0,*args):
+        if section==5 or self.fit_pending:return
+        self.fit_pending=True;QTimer.singleShot(0,self.fit_columns)
+    def fit_columns(self):
+        self.fit_pending=False
+        if self.columnCount()<6:return
+        self.setColumnWidth(5,max(280,self.viewport().width()-sum(self.columnWidth(i) for i in range(5))))
+    def resizeEvent(self,event):
+        super().resizeEvent(event);self.schedule_fit()
 
 
 class SeekSlider(QSlider):
