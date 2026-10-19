@@ -18,6 +18,7 @@ from monitor import VideoMonitor, WheelButton
 from reporting import write_html, read_report, csv_safe
 from updater import Updater,VERSION,fetch_latest
 from issue_tools import IssueDialog,ReportTask
+from flash_checks import flash_preset
 from compact_controls import SeekSlider,CompactStatus
 from appearance import BackgroundCanvas, GlassPanel, BackgroundDialog, DEFAULT_APPEARANCE, clean_settings
 
@@ -41,9 +42,20 @@ class Worker(QThread):
 
 class Timeline(QWidget):
     seek = Signal(float)
+    ignoreBorders = Signal(bool)
     def __init__(self):
         super().__init__(); self.duration=1.; self.position=0.; self.issues=[]
         self.setMinimumHeight(140); self.setMouseTracking(True)
+        self.ignored_borders=False;self.dragging=False;self.drag_target=None
+        self.drag_timer=QTimer(self);self.drag_timer.setInterval(40);self.drag_timer.timeout.connect(self.flush_drag)
+        self.border_button=QPushButton('忽略黑边',self);self.border_button.setCheckable(True)
+        self.border_button.setToolTip('全局忽略所有视频的黑边候选，轨道、问题列表和导出日志均隐藏；再次点击恢复，原始检测记录保留。')
+        self.border_button.toggled.connect(self.ignoreBorders.emit)
+    def resizeEvent(self,event):
+        super().resizeEvent(event);self.border_button.setGeometry(3,10+round(5*self.lane_height())-3,88,23)
+    def flush_drag(self):
+        if self.drag_target is not None:
+            target=self.drag_target;self.drag_target=None;self.seek.emit(target)
     def lane_height(self):return max(16,(self.height()-32)/len(COLORS))
     def paintEvent(self,event):
         p=QPainter(self); p.setRenderHint(QPainter.Antialiasing)
@@ -52,11 +64,13 @@ class Timeline(QWidget):
         bar_h=min(22,max(8,int(self.lane_height()-5)))
         for j,(kind,color) in enumerate(COLORS.items()):
             y=10+int(j*self.lane_height())
-            p.setPen(QColor('#92a4bb')); p.drawText(8,y+12,kind)
+            p.setPen(QColor('#92a4bb'))
+            if kind!='黑边':p.drawText(8,y+12,kind)
             p.fillRect(left,y,w,bar_h,QColor('#202d3d'))
             p.setPen(Qt.NoPen)
             for item in self.issues:
                 if item['kind']!=kind: continue
+                if self.ignored_borders and kind=='黑边':continue
                 if item.get('review')=='误报':continue
                 x=left+min(1,item['start']/max(self.duration,.001))*w
                 span=max(3,(item['end']-item['start'])/max(self.duration,.001)*w)
@@ -73,17 +87,25 @@ class Timeline(QWidget):
         p.setPen(QColor('#92a4bb')); p.drawText(left,self.height()-3,'00:00:00')
         p.drawText(max(left,self.width()-105),self.height()-3,stamp(self.duration))
     def mousePressEvent(self,event):
+        if event.button()!=Qt.LeftButton:return
+        self.dragging=True;self.drag_timer.start()
         x=event.position().x(); w=max(1,self.width()-110)
         t=max(0,min(self.duration,(x-95)/w*self.duration))
         row=int((event.position().y()-10)//self.lane_height())
         kind=list(COLORS)[row] if 0<=row<len(COLORS) else ''
-        near=[v for v in self.issues if v.get('review')!='误报' and v['kind']==kind and abs(v['start']-t)<self.duration*6/w]
+        near=[v for v in self.issues if v.get('review')!='误报' and not(self.ignored_borders and v['kind']=='黑边') and v['kind']==kind and abs(v['start']-t)<self.duration*6/w]
         if near: t=min(near,key=lambda v:abs(v['start']-t))['start']
         self.seek.emit(t)
     def mouseMoveEvent(self,event):
+        if self.dragging:
+            self.drag_target=max(0,min(self.duration,(event.position().x()-95)/max(1,self.width()-110)*self.duration));self.position=self.drag_target;self.update();return
         t=max(0,(event.position().x()-95)/max(1,self.width()-110)*self.duration)
-        found=[v for v in self.issues if v.get('review')!='误报' and v['start']-.1<=t<=v['end']+.1]
+        found=[v for v in self.issues if v.get('review')!='误报' and not(self.ignored_borders and v['kind']=='黑边') and v['start']-.1<=t<=v['end']+.1]
         self.setToolTip('\n'.join(f'{v["kind"]}  {stamp(v["start"])}  {v["detail"]}' for v in found) or stamp(t))
+    def mouseReleaseEvent(self,event):
+        if event.button()==Qt.LeftButton and self.dragging:
+            self.dragging=False;self.drag_timer.stop()
+            self.drag_target=max(0,min(self.duration,(event.position().x()-95)/max(1,self.width()-110)*self.duration));self.flush_drag()
 
 class Window(QMainWindow):
     def __init__(self):
@@ -94,6 +116,7 @@ class Window(QMainWindow):
         self.data_dir.mkdir(parents=True,exist_ok=True)
         self.jobs=[]; self.active=None; self.worker=None; self.running=False; self.current=None
         self.issue_sort=None;self.report_task=None
+        self.ignore_borders=False
         self.media_path=None; self.pending_seek=None; self.controls={}; self.visible_issues=[]
         self.clear_requested=False;self.appearance=DEFAULT_APPEARANCE.copy()
         self.frame_worker=None;self.frame_queue=[];self.frame_generation=0;self.precise_time=None;self.navigation_position=None
@@ -160,8 +183,9 @@ class Window(QMainWindow):
         lower=QWidget();self.results_panel=lower;cl=QVBoxLayout(lower);cl.setContentsMargins(0,0,0,0);self.monitor_split.addWidget(lower);self.monitor_split.setStretchFactor(0,3);self.monitor_split.setStretchFactor(1,2)
         self.results_split=QSplitter(Qt.Horizontal);self.results_split.setHandleWidth(9);self.results_split.setChildrenCollapsible(False);cl.addWidget(self.results_split,1)
         track_panel=QWidget();track_layout=QVBoxLayout(track_panel);track_layout.setContentsMargins(0,0,0,0)
-        track_title=QLabel('问题轨道 · 点击定位');track_title.setMinimumHeight(30);track_layout.addWidget(track_title)
+        track_title=QLabel('问题轨道 · 点击 / 拖拽定位');track_title.setMinimumHeight(30);track_layout.addWidget(track_title)
         self.timeline=Timeline();self.timeline.setMinimumWidth(230); self.timeline.seek.connect(self.seek);track_layout.addWidget(self.timeline,1);self.results_split.addWidget(track_panel)
+        self.timeline.ignoreBorders.connect(self.set_ignore_borders)
         issue_panel=QWidget();cl=QVBoxLayout(issue_panel);cl.setContentsMargins(0,0,0,0);self.results_split.addWidget(issue_panel)
         self.results_split.setStretchFactor(0,1);self.results_split.setStretchFactor(1,3);self.results_split.setSizes([300,850])
         self.monitor_split.setHandleWidth(9);self.monitor_split.setChildrenCollapsible(False)
@@ -210,6 +234,7 @@ class Window(QMainWindow):
         f=section('定帧'); check(f,'freeze','启用疑似定帧'); number(f,'freeze_seconds','最短持续秒数',.05,120,.1,2); number(f,'freeze_delta','容许画面差',0,20,.1,2)
         f=section('夹帧 / 闪帧'); check(f,'flash','启用短暂突变检测'); number(f,'flash_delta','突变差值 ≥',1,255)
         number(f,'return_delta','返回相似差 ≤',1,100); number(f,'flash_frames','最多夹入帧数',1,30)
+        number(f,'flash_ratio','双向突变 / 邻帧差 ≥',1.1,6,.1,2);number(f,'flash_area','局部异常覆盖 % ≥',1,100,.125,3)
         f=section('四边黑边');check(f,'borders','启用上下左右黑边检测');number(f,'border_level','黑边亮度 ≤',0,100);number(f,'border_ratio','行 / 列暗像素 % ≥',80,100,.1,1);number(f,'border_percent','最小边宽 %',.1,25,.1,1);number(f,'border_frames','最少连续帧',1,1000)
         f=section('镜像片段');check(f,'mirror','启用疑似镜像检测');number(f,'mirror_delta','镜像匹配差 ≤',1,60,.5,1);number(f,'mirror_gain','相比原方向改善 % ≥',20,95,1);number(f,'mirror_frames','最少连续帧',1,1000)
         number(f,'mirror_window','回看参考秒数',1,120,1)
@@ -337,6 +362,7 @@ class Window(QMainWindow):
         values=asdict(Settings())
         if i==1: values.update(freeze_seconds=.5,freeze_delta=1,flash_delta=25,block_ratio=3,noise_level=38,black_level=28)
         if i==2: values.update(freeze_seconds=2,freeze_delta=.3,flash_delta=55,block_ratio=5.5,noise_level=65,black_level=12)
+        values.update(flash_preset(i))
         self.apply_cfg(values)
     def add_files(self):
         paths,_=QFileDialog.getOpenFileNames(self,'选择视频','','视频 (*.mp4 *.mov *.mkv *.avi *.mxf *.m4v *.webm *.mts *.ts);;所有文件 (*)')
@@ -420,7 +446,7 @@ class Window(QMainWindow):
         self.progress.setRange(0,0 if value<0 else 100)
         if value>=0:self.progress.setValue(value)
         if self.current==self.active:
-            self.timeline.issues=issues;self.timeline.update();self.count.setText(f'问题标记  {len(issues)}（扫描中）')
+            self.timeline.issues=issues;self.timeline.update();shown=sum(not(self.ignore_borders and v['kind']=='黑边') for v in issues);self.count.setText(f'问题标记  {shown}（扫描中）')
     def on_result(self,result):
         if self.clear_requested:return
         job=self.jobs[self.active];job['result']=result;job['status']='完成 · 有警告' if result['warnings'] else '完成';self.save_result(job);self.update_queue()
@@ -470,14 +496,16 @@ class Window(QMainWindow):
         if self.precise_time is not None:ms=round(self.precise_time*1000)
         self.clock.observe_position(ms/1000,ended=self.player.mediaStatus()==QMediaPlayer.EndOfMedia and self.precise_time is None);self.sync_playback()
     def sync_playback(self):
-        self.timeline.duration=self.clock.duration;self.timeline.position=self.clock.position;self.timeline.update()
+        self.timeline.duration=self.clock.duration
+        if not self.timeline.dragging:self.timeline.position=self.clock.position
+        self.timeline.update()
         self.time_label.setText(f'{stamp(self.clock.position)} / {stamp(self.clock.duration)}')
         if not self.play_slider.isSliderDown():self.play_slider.setValue(round(self.clock.fraction()*10000))
     def duration_changed(self,ms):
         if ms>0:self.clock.observe_duration(ms/1000);self.sync_playback()
     def refresh_table(self,*args):
         result=(self.jobs[self.current].get('result') or {}) if self.current is not None and self.current<len(self.jobs) else {}
-        issues=result.get('issues',[]);kind=self.filter.currentText();self.visible_issues=[v for v in issues if kind=='全部类型' or v['kind']==kind]
+        issues=[v for v in result.get('issues',[]) if not(self.ignore_borders and v['kind']=='黑边')];kind=self.filter.currentText();self.visible_issues=[v for v in issues if kind=='全部类型' or v['kind']==kind]
         if self.issue_sort is None:self.visible_issues.sort(key=lambda v:v.get('review')=='误报')
         else:
             col,reverse=self.issue_sort;keys=[lambda v:v['kind'],lambda v:v['start'],lambda v:v['end']-v['start'],lambda v:v['frame'],lambda v:v.get('review','待复核'),lambda v:v['detail']]
@@ -569,6 +597,11 @@ class Window(QMainWindow):
         row=self.table.currentRow()
         if row<0 or row>=len(self.visible_issues):return
         v=self.visible_issues[row];v['review']=state;self.save_result(self.jobs[self.current]);self.refresh_table();self.table.selectRow(self.visible_issues.index(v));self.timeline.update();self.save_state()
+    def set_ignore_borders(self,enabled):
+        self.ignore_borders=bool(enabled);self.timeline.ignored_borders=bool(enabled)
+        self.timeline.border_button.setText('恢复黑边' if enabled else '忽略黑边')
+        self.refresh_table();self.timeline.update();self.save_state()
+        self.status.setText('已全局忽略黑边：所有视频的轨道、列表及导出隐藏黑边；可点击恢复。' if enabled else '已恢复显示所有黑边候选')
     def sort_issues(self,col):
         self.issue_sort=(col,not self.issue_sort[1] if self.issue_sort and self.issue_sort[0]==col else False)
         self.table.horizontalHeader().setSortIndicatorShown(True);self.table.horizontalHeader().setSortIndicator(col,Qt.DescendingOrder if self.issue_sort[1] else Qt.AscendingOrder);self.refresh_table()
@@ -604,11 +637,17 @@ class Window(QMainWindow):
         try:save_json(self.data_dir/'reports'/name,job['result'])
         except OSError as exc:self.status.setText('报告自动保存失败：'+str(exc))
     def save_state(self):
-        try:save_json(self.data_dir/'session.json',dict(settings=asdict(self.cfg()),appearance=self.appearance,shortcuts=self.shortcuts,view=self.current_view(),jobs=self.jobs))
+        try:save_json(self.data_dir/'session.json',dict(settings=asdict(self.cfg()),ignore_borders=self.ignore_borders,appearance=self.appearance,shortcuts=self.shortcuts,view=self.current_view(),jobs=self.jobs))
         except OSError as exc:self.status.setText('设置保存失败：'+str(exc))
     def load_state(self):
         try:
             data=json.loads((self.data_dir/'session.json').read_text(encoding='utf-8'));self.apply_cfg(data.get('settings',{}))
+            # Migrate previous built-in flash thresholds; preserve custom values.
+            old=data.get('settings',{})
+            if old.get('flash_delta') in (25,35,55) and old.get('return_delta')==12 and 'flash_ratio' not in old:
+                self.apply_cfg(flash_preset({25:1,35:0,55:2}[old['flash_delta']]))
+            self.ignore_borders=bool(data.get('ignore_borders',False));self.timeline.ignored_borders=self.ignore_borders
+            self.timeline.border_button.blockSignals(True);self.timeline.border_button.setChecked(self.ignore_borders);self.timeline.border_button.setText('恢复黑边' if self.ignore_borders else '忽略黑边');self.timeline.border_button.blockSignals(False)
             self.appearance=clean_settings(data.get('appearance',{}))
             self.shortcuts=normalize_keys(data.get('shortcuts',{}));self.view_settings=data.get('view',{})
             for j in data.get('jobs',[]):
@@ -620,6 +659,7 @@ class Window(QMainWindow):
     def export_report(self):
         if self.current is None or not self.jobs[self.current].get('result'):self.status.setText('请先完成检测或导入报告');return
         result=self.jobs[self.current]['result'];path,filter_=QFileDialog.getSaveFileName(self,'导出可直接查看的报告',Path(result['path']).stem+'-质检.html','HTML 可视报告 (*.html);;CSV 表格（Excel / WPS） (*.csv)')
+        if self.ignore_borders:result=dict(result,issues=[v for v in result['issues'] if v['kind']!='黑边'],ignored_kinds=['黑边'])
         if not path:return
         try:
             if 'CSV' in filter_ or path.lower().endswith('.csv'):
