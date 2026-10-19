@@ -5,7 +5,7 @@ from urllib.request import Request,urlopen,build_opener,HTTPRedirectHandler
 from urllib.parse import urlparse
 from PySide6.QtCore import QObject,QThread,Signal,Slot
 from PySide6.QtWidgets import QMessageBox,QProgressDialog
-VERSION='2.0.1'
+VERSION='2.1.0'
 REPOSITORY='https://github.com/foxmailhot/video-quality-inspection'
 REPOSITORY_ID=1412709349
 REPO_API='https://api.github.com/repositories/'+str(REPOSITORY_ID)
@@ -13,7 +13,7 @@ MANIFEST_URL=REPOSITORY+'/releases/latest/download/latest.json'
 LIMIT=2*1024**3
 
 def version_tuple(value):
-    if not isinstance(value,str) or not re.fullmatch(r'v?\d+\.\d+\.\d+',value):raise ValueError('版本号须为正式版本，例如 2.0.1')
+    if not isinstance(value,str) or not re.fullmatch(r'v?\d+\.\d+\.\d+',value):raise ValueError('版本号须为正式版本，例如 2.1.0')
     return tuple(int(n) for n in value.lstrip('v').split('.'))
 
 def safe_url(url):
