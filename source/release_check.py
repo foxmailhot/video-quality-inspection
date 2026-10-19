@@ -40,6 +40,8 @@ def run_check(app,window_type,video,report):
                 assert origin(w.play_slider)<origin(w.queue_bar)<origin(w.table)
                 assert abs(origin(w.queue_bar)-origin(w.focus_button))<=3
                 assert not w.results_panel.isAncestorOf(w.queue_bar)
+                assert w.status.parent() is w.info_box and w.total.parent() is w.info_box
+                assert not w.table.wordWrap() and w.table.columnWidth(5)>=280
                 assert w.start.parent() is w.queue_bar and w.stop.parent() is w.queue_bar and w.badge.parent() is w.queue_bar
                 w.grab().save(str(report.with_suffix('.png')))
                 dialog=BackgroundDialog(w,w.appearance,w.data_dir);dialog.show();state['dialog']=dialog;state['phase']=3;return
@@ -53,10 +55,18 @@ def run_check(app,window_type,video,report):
                 assert w.video.converter.converted>=5
                 assert w.video.grab().toImage().pixelColor(1,1)==QColor('white')
                 assert w.results_split.orientation()==Qt.Horizontal
-                w.player.pause()
+                w.loop_button.click();assert w.loop_range is not None
+                state['loop_range']=w.loop_range;state['loop_position']=w.player.position();state['phase']=5;return
+            if state['phase']==5:
+                assert w.loop_range==state['loop_range']
+                lo,hi=w.loop_range;position=w.player.position();previous=state['loop_position'];state['loop_position']=position
+                if not(previous>hi-500 and position<lo+500):return
+                w.toggle_play();assert w.loop_range is None
+                w.open_help();assert '前后各1秒' in w.help_dialog.browser.toPlainText()
+                w.help_dialog.grab().save(str(report.with_name(report.stem+'-help.png')));w.help_dialog.close()
                 w.clear_all();assert not w.jobs and not w.timeline.issues and w.queue.count()==0
                 assert w.player.source().isEmpty() and w.frame_preview.image.isNull()
-                save_json(report,dict(passed=True,frame_forward=.84,frame_backward=.8,managed_background=True,glass=True,clear_all=True,async_playback=True,horizontal_results=True,settings_menu=True,monitor_progress=True,queue_controls_between=True,cpu_preview_requested=os.environ.get('QT_FFMPEG_DECODING_HW_DEVICE_TYPES')==','))
+                save_json(report,dict(passed=True,frame_forward=.84,frame_backward=.8,managed_background=True,glass=True,clear_all=True,async_playback=True,horizontal_results=True,settings_menu=True,monitor_progress=True,queue_controls_between=True,loop_review=True,help_guide=True,cpu_preview_requested=os.environ.get('QT_FFMPEG_DECODING_HW_DEVICE_TYPES')==','))
                 timer.stop();w.close();app.quit()
         except Exception:
             save_json(report,dict(passed=False,error=traceback.format_exc()));timer.stop();w.close();app.quit()
