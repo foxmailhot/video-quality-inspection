@@ -19,7 +19,8 @@ from reporting import write_html, read_report, csv_safe
 from updater import Updater,VERSION,fetch_latest
 from issue_tools import IssueDialog,ReportTask
 from flash_checks import flash_preset
-from compact_controls import SeekSlider,CompactStatus
+from help_dialog import HelpDialog
+from compact_controls import SeekSlider,CompactStatus,IssueTable
 from appearance import BackgroundCanvas, GlassPanel, BackgroundDialog, DEFAULT_APPEARANCE, clean_settings
 
 COLORS = {'黑帧':'#adbbd1','疑似定帧':'#61adff','疑似夹帧':'#ffc467','疑似花屏':'#ef79c7','解码损坏':'#ff716c','黑边':'#c6a0ff','疑似镜像':'#f5a679'}
@@ -123,13 +124,19 @@ class Window(QMainWindow):
         self.frame_session=None;self.shortcuts=DEFAULT_KEYS.copy();self.clock=PlaybackClock()
         self.close_requested=False;self.closing=False;self.view_settings={};self.frame_last_direction=1
         self.updater=Updater(self)
+        self.loop_range=None;self.loop_rewinding=False;self.current_warning='';self.help_dialog=None
+        self.loop_timer=QTimer(self);self.loop_timer.setInterval(20);self.loop_timer.timeout.connect(self.check_loop)
         self.warm_timer=QTimer(self);self.warm_timer.setSingleShot(True);self.warm_timer.timeout.connect(self.warm_preview)
         self.background=BackgroundCanvas();root=self.background;self.setCentralWidget(root);outer=QVBoxLayout(root);outer.setContentsMargins(10,8,10,8);outer.setSpacing(6)
         header=QHBoxLayout();header.setSpacing(5);title=QLabel('FrameScope');title.setObjectName('title');header.addWidget(title)
         for label,fn in [('＋ 视频',self.add_files),('文件夹',self.add_folder),('导入',self.import_report),('导出日志',self.export_report)]:
             button=QPushButton(label);button.clicked.connect(fn);header.addWidget(button)
         self.params_button=QPushButton('检测参数');self.params_button.clicked.connect(self.open_parameters);header.addWidget(self.params_button)
-        header.addStretch()
+        self.info_box=QFrame();self.info_box.setObjectName('infoBox');info=QHBoxLayout(self.info_box);info.setContentsMargins(8,2,8,2);info.setSpacing(8)
+        self.status=CompactStatus('就绪');info.addWidget(self.status,1)
+        self.total=QLabel('队列 0 / 0');self.total.setMinimumWidth(120);self.total.setObjectName('muted');info.addWidget(self.total)
+        header.addWidget(self.info_box,1)
+        self.help_button=QPushButton('帮助');self.help_button.setToolTip('操作指南、检测限制和当前视频提示');self.help_button.clicked.connect(self.open_help);header.addWidget(self.help_button)
         self.settings_button=QPushButton('设置');self.settings_menu=QMenu(self.settings_button)
         self.settings_menu.addAction('快捷键',self.edit_shortcuts)
         self.settings_menu.addAction('背景',self.edit_background)
@@ -140,7 +147,6 @@ class Window(QMainWindow):
         ll.addWidget(QLabel('检测队列')); self.queue=QListWidget(); self.queue.setMinimumWidth(230); self.queue.currentRowChanged.connect(self.select_job); ll.addWidget(self.queue)
         row=QHBoxLayout(); rem=QPushButton('移除选中'); rem.clicked.connect(self.remove_job); row.addWidget(rem); retry=QPushButton('重新检测'); retry.clicked.connect(self.retry); row.addWidget(retry); ll.addLayout(row)
         self.clear_button=QPushButton('一键清空列表');self.clear_button.setToolTip('清空全部队列项和当前结果；检测中会先停止任务。原视频文件不受影响。');self.clear_button.clicked.connect(self.clear_all);ll.addWidget(self.clear_button)
-        ll.addWidget(QLabel('拖入视频文件即可添加\n双击问题列表可跳到对应位置'))
         split.addWidget(left)
         center=GlassPanel(root); cl=QVBoxLayout(center); cl.setContentsMargins(8,8,8,8)
         monitor_header=QHBoxLayout();monitor_header.setSpacing(8)
@@ -197,18 +203,19 @@ class Window(QMainWindow):
         edit=QPushButton('编辑');edit.clicked.connect(self.edit_issue);line.addWidget(edit)
         default=QPushButton('默认排序');default.clicked.connect(self.reset_issue_sort);line.addWidget(default)
         cl.addLayout(line)
-        self.table=QTableWidget(0,6);self.table.setMinimumHeight(110); self.table.setHorizontalHeaderLabels(['类型','起点','时长','帧号（从 0）','复核','依据'])
+        self.table=IssueTable(0,6);self.table.setMinimumHeight(110); self.table.setHorizontalHeaderLabels(['类型','起点','时长','帧号（从 0）','复核','依据'])
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows); self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers); self.table.verticalHeader().hide()
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive);self.table.horizontalHeader().setSectionResizeMode(5,QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive);self.table.setSortingEnabled(False)
         for col,width in enumerate((95,110,75,95,85)):self.table.setColumnWidth(col,width)
-        self.table.setWordWrap(True);self.table.setShowGrid(False);self.table.setAlternatingRowColors(True);self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.table.setShowGrid(False);self.table.setAlternatingRowColors(True)
         self.table.horizontalHeader().sectionDoubleClicked.connect(self.sort_issues)
         self.table.horizontalHeader().setToolTip('双击表头排序，再次双击切换升降序；默认排序将误报放在末尾')
         self.table.currentCellChanged.connect(self.update_issue_detail)
         self.table.cellDoubleClicked.connect(self.jump_issue); cl.addWidget(self.table,2)
-        self.issue_detail=QPlainTextEdit();self.issue_detail.setReadOnly(True);self.issue_detail.setPlaceholderText('选择问题，查看完整时间、帧号和检测依据。可选中复制。');self.issue_detail.setMinimumHeight(54);self.issue_detail.setMaximumHeight(90);cl.addWidget(self.issue_detail)
-        self.note=QLabel('夹帧、定帧、花屏均为候选问题；正常转场、静止镜头和特效可能触发。'); self.note.setWordWrap(True); self.note.setObjectName('muted'); cl.addWidget(self.note)
+        self.issue_detail=QPlainTextEdit();self.issue_detail.setReadOnly(True);self.issue_detail.setPlaceholderText('选择问题，查看完整时间、帧号和检测依据。可选中复制。');self.issue_detail.setMinimumHeight(54);self.issue_detail.setMaximumHeight(90)
+        details=QHBoxLayout();details.addWidget(self.issue_detail,1)
+        self.loop_button=QPushButton('循环回看\n前后各1秒');self.loop_button.setCheckable(True);self.loop_button.setMinimumHeight(54);self.loop_button.setFixedWidth(106);self.loop_button.setToolTip('以当前播放头为中心固定前后各1秒循环，空格停止；靠近片头片尾时限制在视频范围内。');self.loop_button.clicked.connect(self.toggle_loop);details.addWidget(self.loop_button);cl.addLayout(details)
         split.addWidget(center)
         scroll=QScrollArea(); scroll.setWidgetResizable(True); scroll.setMinimumWidth(360)
         params=QWidget(); pl=QVBoxLayout(params)
@@ -243,12 +250,10 @@ class Window(QMainWindow):
         pl.addStretch(); scroll.setWidget(params); split.setSizes([250,1190])
         self.params_dialog=QDialog(self);self.params_dialog.setWindowTitle('检测参数');self.params_dialog.resize(480,740);pd=QVBoxLayout(self.params_dialog);pd.addWidget(scroll);done=QPushButton('完成');done.clicked.connect(self.params_dialog.accept);pd.addWidget(done);self.params_dialog.finished.connect(lambda:self.save_state())
         for view in (self.queue,self.table,scroll):view.viewport().setAutoFillBackground(False)
-        footer=QHBoxLayout();footer.setSpacing(8);self.status=CompactStatus('就绪');footer.addWidget(self.status,1)
-        self.total=QLabel('队列 0 / 0');self.total.setObjectName('muted');footer.addWidget(self.total);outer.addLayout(footer)
         self.player.positionChanged.connect(self.position_changed); self.player.durationChanged.connect(self.duration_changed)
         self.player.mediaStatusChanged.connect(self.media_status)
         self.player.playbackStateChanged.connect(self.playback_state_changed)
-        self.player.errorOccurred.connect(lambda *a:self.status.setText('播放失败：'+self.player.errorString()))
+        self.player.errorOccurred.connect(self.play_error)
         self.setAcceptDrops(True)
         self.key_router=ShortcutRouter(self,dict(previous=lambda:self.step_frame(-1),next=lambda:self.step_frame(1),play=self.toggle_play,open=self.add_files))
         self.load_state()
@@ -258,6 +263,10 @@ class Window(QMainWindow):
 
     def open_parameters(self):
         self.params_dialog.show();self.params_dialog.raise_();self.params_dialog.activateWindow()
+    def open_help(self):
+        if self.loop_range is not None:self.stop_loop(True)
+        if self.help_dialog is None:self.help_dialog=HelpDialog(self)
+        self.help_dialog.update_guide(self.shortcuts,self.current_warning);self.help_dialog.show();self.help_dialog.raise_();self.help_dialog.activateWindow()
     def focus_monitor(self,enabled):
         if enabled:self.saved_focus_sizes=(self.monitor_split.sizes(),self.results_split.sizes())
         self.results_panel.setVisible(not enabled);self.focus_button.setText('退出专注' if enabled else '专注监视器')
@@ -387,16 +396,17 @@ class Window(QMainWindow):
         if not 0<=index<len(self.jobs): self.current=None; return
         self.current=index; job=self.jobs[index]; self.file_label.setText(Path(job['path']).name); self.file_label.setToolTip(job['path'])
         if self.media_path!=job['path']:
+            self.stop_loop(False)
             self.invalidate_frame_requests(reset_cache=True);self.player.stop();self.clock.reset();self.pending_seek=None;self.media_path=job['path'];self.player.setSource(QUrl.fromLocalFile(job['path']))
         result=job.get('result') or {};self.clock.observe_duration(result.get('info',{}).get('duration',0));self.sync_playback()
         self.timeline.issues=result.get('issues',[]); self.timeline.update(); self.refresh_table()
         warnings=result.get('warnings',[])
         text=('检测失败：'+job.get('error','未知错误')) if job['status']=='失败' else '\n'.join(warnings)
-        self.note.setToolTip(text)
-        self.note.setText(text[:280] if text else '夹帧、定帧、花屏均为候选问题；正常转场、静止镜头和特效可能触发。')
+        self.current_warning=text;self.help_button.setToolTip('操作指南、检测限制和当前视频提示'+('\n'+text if text else ''))
         if result and not self.running:
             info=result.get('info',{})
             self.status.setText(f'{info.get("backend","")} / {info.get("decode_backend","")} · 共 {result.get("frames",0):,} 帧 · 用时 {result.get("elapsed",0)} 秒')
+        if text:self.status.setText('视频提示：'+text.replace('\n','；'))
     def remove_job(self):
         row=self.queue.currentRow()
         if row<0:return
@@ -413,12 +423,13 @@ class Window(QMainWindow):
         if self.active is not None:return
         self.perform_clear()
     def perform_clear(self):
+        self.stop_loop(False);self.current_warning='';self.help_button.setToolTip('操作指南、检测限制和当前视频提示')
         self.invalidate_frame_requests(reset_cache=True);self.player.stop();self.player.setSource(QUrl());self.clock.reset();self.pending_seek=None;self.media_path=None
         self.frame_preview.set_image(QImage())
         self.queue.blockSignals(True);self.jobs=[];self.current=None;self.active=None;self.queue.clear();self.queue.blockSignals(False)
         self.running=False;self.clear_requested=False;self.clear_button.setEnabled(True)
         self.timeline.issues=[];self.timeline.position=0.;self.timeline.duration=0.;self.timeline.update()
-        self.filter.setCurrentIndex(0);self.refresh_table();self.file_label.setText('添加视频，开始检查');self.note.clear();self.note.setToolTip('')
+        self.filter.setCurrentIndex(0);self.refresh_table();self.file_label.setText('添加视频，开始检查')
         self.progress.setRange(0,100);self.progress.setValue(0);self.position_changed(0);self.start.setEnabled(True);self.stop.setEnabled(False)
         self.update_queue();self.save_state();self.status.setText('视频列表已清空')
     def retry(self):
@@ -468,17 +479,48 @@ class Window(QMainWindow):
     def finish_queue(self):
         self.running=False;self.active=None;self.start.setEnabled(True);self.stop.setEnabled(False);self.save_state()
     def toggle_play(self):
+        if self.loop_range is not None:self.stop_loop(True);return
         if self.player.playbackState()==QMediaPlayer.PlayingState:self.player.pause()
         else:
             timestamp=self.precise_time;self.invalidate_frame_requests()
             if timestamp is not None:self.player.setPosition(round(timestamp*1000))
             self.player.play()
+    def toggle_loop(self,checked):
+        if not checked:self.stop_loop(True);return
+        duration=self.player.duration()/1000 or self.clock.duration
+        if not self.media_path or duration<=0:
+            self.stop_loop(False);self.status.setText('请先加载视频并等待时长就绪');return
+        center=max(0.,min(duration,self.timeline.position));start=max(0.,center-1.);end=min(duration,center+1.)
+        if end-start<.001:self.stop_loop(False);return
+        self.player.pause();self.invalidate_frame_requests();self.loop_range=(round(start*1000),round(end*1000))
+        self.loop_button.setText('停止循环\n空格停止');self.loop_button.setChecked(True)
+        self.status.setText(f'循环回看：{stamp(start)} — {stamp(end)}，以点击时的播放头为中心；空格停止')
+        if self.player.mediaStatus() in (QMediaPlayer.LoadingMedia,QMediaPlayer.NoMedia):self.pending_seek=self.loop_range[0]
+        else:self.player.setPosition(self.loop_range[0])
+        self.warm_timer.stop();self.loop_timer.start();self.player.play()
+    def stop_loop(self,pause=True):
+        was_active=self.loop_range is not None
+        self.loop_range=None;self.loop_timer.stop();self.loop_button.setChecked(False);self.loop_button.setText('循环回看\n前后各1秒')
+        if pause:self.player.pause()
+        if was_active and self.status.full_text.startswith('循环回看：'):self.status.setText('循环回看已停止')
+    def check_loop(self):
+        if self.loop_range is None or self.loop_rewinding:return
+        if self.player.position()>=self.loop_range[1]:self.restart_loop()
+    def restart_loop(self):
+        if self.loop_range is None or self.loop_rewinding:return
+        self.loop_rewinding=True
+        try:
+            self.player.setPosition(self.loop_range[0]);self.clock.ended=False;self.player.play()
+        finally:self.loop_rewinding=False
+    def play_error(self,*args):
+        self.stop_loop(False);self.status.setText('播放失败：'+self.player.errorString())
     def playback_state_changed(self,state):
         if self.closing:return
         if state==QMediaPlayer.PlayingState:
             self.warm_timer.stop();self.navigation_position=None;self.clock.ended=False
         elif self.media_path:self.warm_timer.start(100)
     def seek(self,t):
+        if self.loop_range is not None:self.stop_loop(False)
         self.invalidate_frame_requests()
         self.navigation_position=max(0,t)
         ms=round(max(0,t)*1000)
@@ -486,6 +528,7 @@ class Window(QMainWindow):
         else:self.player.setPosition(ms)
         self.clock.ended=False;self.clock.observe_position(max(0,t));self.sync_playback();self.warm_timer.start(100)
     def media_status(self,status):
+        if status==QMediaPlayer.EndOfMedia and self.loop_range is not None:self.restart_loop();return
         if status in (QMediaPlayer.LoadedMedia,QMediaPlayer.BufferedMedia) and self.pending_seek is not None:
             ms=self.pending_seek;self.pending_seek=None;self.player.setPosition(ms)
         if status==QMediaPlayer.LoadedMedia:
@@ -493,6 +536,7 @@ class Window(QMainWindow):
         if status==QMediaPlayer.EndOfMedia and self.precise_time is None:
             self.clock.observe_position(self.player.position()/1000,ended=True);self.sync_playback()
     def position_changed(self,ms):
+        if self.loop_range is not None and ms>=self.loop_range[1]:self.restart_loop();return
         if self.precise_time is not None:ms=round(self.precise_time*1000)
         self.clock.observe_position(ms/1000,ended=self.player.mediaStatus()==QMediaPlayer.EndOfMedia and self.precise_time is None);self.sync_playback()
     def sync_playback(self):
@@ -503,23 +547,32 @@ class Window(QMainWindow):
         if not self.play_slider.isSliderDown():self.play_slider.setValue(round(self.clock.fraction()*10000))
     def duration_changed(self,ms):
         if ms>0:self.clock.observe_duration(ms/1000);self.sync_playback()
-    def refresh_table(self,*args):
+    def refresh_table(self,*args,preserve_selection=True):
+        row=self.table.currentRow();selected=self.visible_issues[row] if preserve_selection and 0<=row<len(self.visible_issues) else None
+        scroll=self.table.verticalScrollBar().value();hscroll=self.table.horizontalScrollBar().value()
         result=(self.jobs[self.current].get('result') or {}) if self.current is not None and self.current<len(self.jobs) else {}
         issues=[v for v in result.get('issues',[]) if not(self.ignore_borders and v['kind']=='黑边')];kind=self.filter.currentText();self.visible_issues=[v for v in issues if kind=='全部类型' or v['kind']==kind]
-        if self.issue_sort is None:self.visible_issues.sort(key=lambda v:v.get('review')=='误报')
+        if self.issue_sort is None:self.visible_issues.sort(key=lambda v:(v.get('review')=='误报',v['start'],v['frame'],v['end'],v['kind']))
         else:
             col,reverse=self.issue_sort;keys=[lambda v:v['kind'],lambda v:v['start'],lambda v:v['end']-v['start'],lambda v:v['frame'],lambda v:v.get('review','待复核'),lambda v:v['detail']]
             self.visible_issues.sort(key=keys[col],reverse=reverse)
+        self.table.setUpdatesEnabled(False);self.table.blockSignals(True)
+        self.table.clearSelection();self.table.setCurrentCell(-1,-1)
         self.table.setRowCount(len(self.visible_issues));self.count.setText(f'问题标记  {len(issues)}')
         for row,v in enumerate(self.visible_issues):
             for col,text in enumerate([v['kind'],stamp(v['start']),f'{v["end"]-v["start"]:.3f}s',str(v['frame']),v.get('review','待复核'),v['detail']]):
                 item=QTableWidgetItem(text);item.setToolTip(text)
                 if col==0:item.setForeground(QColor(COLORS.get(v['kind'],'white')))
                 self.table.setItem(row,col,item)
+        index=next((i for i,v in enumerate(self.visible_issues) if v is selected),None)
+        if index is not None:self.table.setCurrentCell(index,0);self.table.selectRow(index)
+        self.table.blockSignals(False);self.table.setUpdatesEnabled(True)
+        self.table.verticalScrollBar().setValue(scroll);self.table.horizontalScrollBar().setValue(hscroll)
+        self.table.schedule_fit()
         self.update_issue_detail()
     def jump_issue(self,row,col):
-        if row<len(self.visible_issues):
-            timestamp=self.visible_issues[row]['start'];self.player.pause();self.seek(timestamp)
+        if 0<=row<len(self.visible_issues):
+            timestamp=max(0.,self.visible_issues[row]['start']-1.);self.player.pause();self.seek(timestamp)
             self.frame_queue.append((0,timestamp));self.start_frame_request()
     def invalidate_frame_requests(self,reset_cache=False):
         self.warm_timer.stop()
@@ -532,6 +585,7 @@ class Window(QMainWindow):
         self.video_stack.setCurrentWidget(self.video)
     def step_frame(self,direction):
         if not self.media_path:return
+        if self.loop_range is not None:self.stop_loop(False)
         if self.player.playbackState()==QMediaPlayer.PlayingState and self.video.displayed_time is not None:
             self.navigation_position=self.video.displayed_time
         self.player.pause();self.warm_timer.stop();self.frame_last_direction=direction
@@ -596,7 +650,14 @@ class Window(QMainWindow):
     def review(self,state):
         row=self.table.currentRow()
         if row<0 or row>=len(self.visible_issues):return
-        v=self.visible_issues[row];v['review']=state;self.save_result(self.jobs[self.current]);self.refresh_table();self.table.selectRow(self.visible_issues.index(v));self.timeline.update();self.save_state()
+        v=self.visible_issues[row]
+        candidates=self.visible_issues[row+1:]+list(reversed(self.visible_issues[:row]))
+        next_issue=next((item for item in candidates if item.get('review')!='误报'),None)
+        v['review']=state;self.save_result(self.jobs[self.current]);self.refresh_table(preserve_selection=False)
+        index=next((i for i,item in enumerate(self.visible_issues) if item is next_issue),None)
+        if index is not None:
+            self.table.setCurrentCell(index,0);self.table.selectRow(index);self.table.scrollToItem(self.table.item(index,0),QAbstractItemView.EnsureVisible)
+        self.timeline.update();self.save_state()
     def set_ignore_borders(self,enabled):
         self.ignore_borders=bool(enabled);self.timeline.ignored_borders=bool(enabled)
         self.timeline.border_button.setText('恢复黑边' if enabled else '忽略黑边')
@@ -695,6 +756,7 @@ class Window(QMainWindow):
         if event.mimeData().hasUrls():event.acceptProposedAction()
     def dropEvent(self,event):self.add_paths([u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()])
     def closeEvent(self,event):
+        self.stop_loop(False)
         self.close_requested=True
         if self.frame_worker is not None:
             self.invalidate_frame_requests();self.status.setText('正在结束逐帧解码…');event.ignore();return
@@ -714,6 +776,7 @@ class Window(QMainWindow):
 STYLE='''
 QWidget { background:transparent; color:#e2eaf6; font-family:"Microsoft YaHei UI"; font-size:12px; }
 QMainWindow,QDialog { background:#141c28; }
+QFrame#infoBox { background:rgba(20,32,46,190); border:1px solid #35465e; border-radius:6px; }
 QLabel#title { font-size:18px; font-weight:700; } QLabel#filename { font-size:15px; font-weight:600; }
 QLabel#muted { color:#90a0b7; } QLabel#badge { color:#85e7c4; background:#1d3839; padding:5px 8px; border-radius:12px; }
 QPushButton { background:#263447; border:1px solid #35465e; padding:5px 8px; border-radius:6px; }
