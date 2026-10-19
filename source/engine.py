@@ -7,6 +7,7 @@ from collections import deque
 import numpy as np
 import av
 from spatial_checks import SpatialChecks
+from flash_checks import SingleFrameCheck
 
 @dataclass
 class Settings:
@@ -15,8 +16,10 @@ class Settings:
     black_frames: int = 1
     freeze_seconds: float = 1.0
     freeze_delta: float = 0.7
-    flash_delta: float = 35
-    return_delta: float = 12
+    flash_delta: float = 18
+    return_delta: float = 20
+    flash_ratio: float = 1.8
+    flash_area: float = 6.25
     flash_frames: int = 3
     block_ratio: float = 4.0
     noise_level: float = 48
@@ -75,6 +78,7 @@ class Detector:
         self.anchor = None
         self.freeze_start = None
         self.pending = None
+        self.single_frame = SingleFrameCheck(cfg,xp)
         self.last_t, self.last_i = 0., -1
         self.recent_edges = deque(maxlen=48)
         self.recent_seams = deque(maxlen=48)
@@ -127,16 +131,21 @@ class Detector:
                 self.issues.append(Issue('疑似定帧',st,t,fi,i-1,f'与起始画面平均差 ≤ {p.freeze_delta:g}/255；静止镜头也可能触发'))
             self.anchor, self.freeze_start = y.copy(), (t,i)
         if p.flash and self.prev is not None:
+            returned=False
             if self.pending:
-                base, st, fi = self.pending
+                base, st, fi, onset = self.pending
                 back = float(xp.abs(y-base).mean())
-                if back <= p.return_delta:
+                if back <= p.return_delta and onset>=p.flash_ratio*max(1.,back):
                     self.issues.append(Issue('疑似夹帧',st,t,fi,i-1,f'短暂突变后返回相似画面；{i-fi} 帧；返回差 {back:.2f}'))
-                    self.pending = None
+                    self.pending = None;returned=True
                 elif i-fi >= p.flash_frames:
                     self.pending = None
-            if self.pending is None and diff >= p.flash_delta:
-                self.pending = (self.prev.copy(),t,i)
+            if self.pending is None and not returned and diff >= p.flash_delta:
+                self.pending = (self.prev.copy(),t,i,diff)
+        if p.flash:
+            candidate=self.single_frame.add(x,t,i)
+            if candidate and not any(v.kind=='疑似夹帧' and v.frame<=candidate[2]<=v.last_frame for v in self.issues):
+                self.issues.append(Issue('疑似夹帧',*candidate))
         baseline = float(np.median(self.recent_edges)) if len(self.recent_edges)>=5 else edge_v
         noisy = edge_v > p.noise_level and edge_v > max(1,baseline)*1.8
         blocked = block_v >= p.block_ratio and edge_v > 3
@@ -246,7 +255,7 @@ def analyze(path, cfg, progress=lambda *args: None, cancelled=lambda:False):
         if stream.frames and count < stream.frames:
             warnings.append(f'解码 {count} 帧，容器声明 {stream.frames} 帧；可能有丢帧或损坏。')
         info['duration'] = max(dur,end)
-        result = dict(version='2.0.1',path=str(Path(path).resolve()),settings=asdict(cfg),info=info,
+        result = dict(version='2.1.0',path=str(Path(path).resolve()),settings=asdict(cfg),info=info,
                       issues=[asdict(v) for v in det.finish(end)],warnings=warnings,frames=count,
                       elapsed=round(time.monotonic()-started,2),complete=not any('短于' in w or '丢帧' in w for w in warnings))
         progress(100, f'完成 · {count:,} 帧 · {len(result["issues"])} 个标记',result['issues'])
