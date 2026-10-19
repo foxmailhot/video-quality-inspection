@@ -23,6 +23,10 @@ class ShortcutRouter(QObject):
     def eventFilter(self,watched,event):
         if event.type() not in (QEvent.KeyPress,QEvent.ShortcutOverride):return False
         if not self.window.isActiveWindow() or QApplication.activeModalWidget() is not None:return False
+        if event.key()==Qt.Key_Space and event.modifiers()==Qt.NoModifier and getattr(self.window,'loop_range',None) is not None:
+            event.accept()
+            if event.type()==QEvent.KeyPress and not event.isAutoRepeat():self.window.stop_loop(True)
+            return True
         focus=QApplication.focusWidget()
         if isinstance(focus,(QLineEdit,QAbstractSpinBox,QTextEdit,QPlainTextEdit,QKeySequenceEdit,QComboBox)):return False
         key=QKeySequence(event.keyCombination()).toString(QKeySequence.PortableText)
